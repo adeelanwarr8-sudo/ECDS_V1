@@ -172,10 +172,10 @@ with st.sidebar:
             st.session_state.detection_result = result
             st.session_state.detection_signature = signature
             st.success("Change screening completed.")
-        except (ValueError, EngineError, Exception) as exc:
+        except Exception as exc:
             # Never render credentials or raw authentication error details.
             st.session_state.detection_error = str(exc) if isinstance(exc, (ValueError, EngineError)) else (
-                "Earth Engine processing failed. Check configured permissions, imagery coverage and selected thresholds."
+                "An unexpected processing error occurred. Review Streamlit app logs."
             )
             st.error(st.session_state.detection_error)
     st.caption("Public imagery only · Results are screening leads, not evidence.")

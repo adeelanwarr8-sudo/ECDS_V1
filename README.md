@@ -76,3 +76,13 @@ Tests cover local AOI and parameter validation. **Live Earth Engine execution ha
 - The current candidate score is `area_ha × abs(mean_dNDVI)`, **not crime probability**.
 - Detection scores are not yet calibrated against independent reference sites.
 - The service uses external imagery and basemap providers; it is for open-data demonstration only.
+
+## Increment 2 diagnostic update (2026-11-13)
+
+This update preserves the locked interface, 2016–2025 study period, 50–5,000 ha AOI limits and original detection thresholds. It adds *stage-specific* server-side error reporting; no credentials or raw third-party authentication messages are displayed in the browser.
+
+When a detection fails, the UI now displays a stage and a short **Diagnostic ID**, e.g. `Earth Engine failed at Dynamic World availability. Diagnostic ID: abc1234567`. In Streamlit Community Cloud, open **Manage app → Logs** and search for the same ID. The server-side record includes the processing stage, exception class and a filtered/truncated error message. Never share service-account JSON, credentials, access tokens, or unredacted logs with secrets.
+
+The tracked stages are initialization/authentication; AOI geometry; Sentinel-2 scene availability; composite/index construction; Dynamic World availability; change mask; raster area reduction; vectorisation; candidate count/retrieval; and map tile generation. Authentication/permission errors may first manifest at a later Earth Engine API call because server-side expressions are lazy.
+
+**Verification:** Python syntax compilation and 13 local unit tests passed. Live Earth Engine execution and actual browser functionality still require checking on the Streamlit deployment. No Google Cloud IAM roles were modified.
