@@ -1,6 +1,6 @@
-"""ECDS | Environmental Crime Detection System — Increment 1 interface.
+"""ECDS | Environmental Crime Detection System — Increment 2.
 
-This is a functional UI/AOI prototype. NO satellite detection is performed yet.
+GEE-powered environmental land-change screening (not criminal evidence).
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from folium.plugins import Draw, Fullscreen, MeasureControl
 from streamlit_folium import st_folium
 
 from geo_utils import AOIError, MAX_HA, MIN_HA, validate_aoi
+from gee_engine import EngineError, initialize_earth_engine, run_detection, validate_inputs
 
 st.set_page_config(
     page_title="ECDS | Environmental Crime Detection System",
@@ -52,6 +53,9 @@ for key, initial in {
     "last_drawing_signature": None,
     "map_city": "Sweden (overview)",
     "map_epoch": 0,
+    "detection_result": None,
+    "detection_error": None,
+    "detection_signature": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = initial
@@ -66,7 +70,7 @@ st.markdown("""
 
 with st.sidebar:
     st.title("Analysis Configuration")
-    st.caption("Increment 1 — Interface and AOI controls")
+    st.caption("Increment 2 — Earth Engine screening")
     st.divider()
     st.subheader("1 · Study Area")
     municipality = st.selectbox(
@@ -84,6 +88,7 @@ with st.sidebar:
             try:
                 accepted = validate_aoi(uploaded.getvalue())
                 st.session_state.accepted_aoi = accepted
+                st.session_state.detection_result = None
                 st.session_state.aoi_origin = "Uploaded GeoJSON"
                 st.session_state.uploaded_signature = file_signature
                 st.success("Uploaded AOI accepted.")
@@ -96,6 +101,7 @@ with st.sidebar:
         st.warning("No valid AOI selected.")
     if st.button("Remove AOI", use_container_width=True):
         st.session_state.accepted_aoi = None
+        st.session_state.detection_result = None
         st.session_state.aoi_origin = None
         st.session_state.uploaded_signature = None
         st.session_state.last_drawing_signature = None
@@ -142,10 +148,40 @@ with st.sidebar:
         cloud_score = st.slider("Cloud Score+ clear threshold", 0.40, 0.90, 0.65, 0.05)
     if st.session_state.accepted_aoi is None:
         st.caption("An accepted AOI is required before detection.")
-    run_disabled = True  # Detection engine intentionally reserved for Increment 2.
-    st.button("🛰️ Run Detection", type="primary", disabled=run_disabled, use_container_width=True,
-              help="Enabled in Increment 2 when the verified GEE processing engine is connected.")
-    st.caption("Detection is not connected in Increment 1.")
+    active_config = {
+        "geometry": st.session_state.accepted_aoi["geometry"] if st.session_state.accepted_aoi else None,
+        "before_start": before_start.isoformat(), "before_end": before_end.isoformat(),
+        "after_start": after_start.isoformat(), "after_end": after_end.isoformat(),
+        "thresholds": {"ndvi_decrease": ndvi_drop, "bsi_increase": bsi_rise,
+            "nbr_decrease": nbr_drop, "min_patch_ha": min_patch,
+            "cloud_score_clear_threshold": cloud_score},
+    }
+    signature = json.dumps(active_config, sort_keys=True)
+    previous = st.session_state.get("detection_signature")
+    if st.session_state.detection_result and signature != previous:
+        st.warning("Parameters changed after the last run. Previous detection is hidden until re-run.")
+    if st.button("🛰️ Run Detection", type="primary", disabled=not (st.session_state.accepted_aoi and dates_valid),
+                 use_container_width=True):
+        st.session_state.detection_result = None
+        st.session_state.detection_error = None
+        try:
+            validate_inputs(active_config)
+            with st.spinner("Running Earth Engine land-change screening and candidate extraction…"):
+                ee = initialize_earth_engine(st.secrets)
+                result = run_detection(active_config, ee)
+            st.session_state.detection_result = result
+            st.session_state.detection_signature = signature
+            st.success("Change screening completed.")
+        except (ValueError, EngineError, Exception) as exc:
+            # Never render credentials or raw authentication error details.
+            st.session_state.detection_error = str(exc) if isinstance(exc, (ValueError, EngineError)) else (
+                "Earth Engine processing failed. Check configured permissions, imagery coverage and selected thresholds."
+            )
+            st.error(st.session_state.detection_error)
+    st.caption("Public imagery only · Results are screening leads, not evidence.")
+
+result = st.session_state.detection_result if st.session_state.get("detection_signature") == json.dumps(active_config,sort_keys=True) else None
+
 
 workspace, candidates_tab, analytics_tab, reports_tab = st.tabs(
     ["Detection Workspace", "Candidate Intelligence", "Spatial Analytics", "Reports & Data"]
@@ -168,7 +204,11 @@ with workspace:
         st.write(f"{after_start.isoformat()} → {after_end.isoformat()}")
         st.caption("The two periods must cover comparable seasons.")
         st.markdown("**Detection status**")
-        st.info("Engine not yet connected · Increment 2")
+        if result:
+            st.success(f"Completed · {result['scene_counts']['before']} before / {result['scene_counts']['after']} after scenes")
+            st.caption(f"Valid paired-image area: {result['valid_area_ha']:,.1f} ha")
+        else:
+            st.info(st.session_state.detection_error or "No current detection. Configure Earth Engine credentials and run screening.")
 
     with rhs:
         h1, h2 = st.columns([0.7, 0.3])
@@ -185,6 +225,19 @@ with workspace:
             tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
             attr="Tiles © Esri and contributors", name="Satellite", show=base_map == "Satellite"
         ).add_to(m)
+        if result:
+            active_layer = st.selectbox("Detection layer", ["After RGB", "Before RGB", "ΔNDVI", "Flagged pixels"],
+                                        key="detection_layer")
+            # Only the selected EE raster layer is requested, avoiding unnecessary tile rendering.
+            folium.TileLayer(tiles=result['tiles'][active_layer], name=active_layer,
+                             attr="Google Earth Engine / Copernicus / Google", overlay=True,
+                             show=True, control=True, opacity=0.90).add_to(m)
+            if result['features']:
+                folium.GeoJson({"type":"FeatureCollection","features":result['features']},
+                    name="Change candidates",style_function=lambda _: {
+                    "color":"#ffab00","weight":2,"fillOpacity":.13},
+                    tooltip=folium.GeoJsonTooltip(fields=["candidate_id","area_ha","mean_dNDVI"],
+                                                aliases=["Candidate","Area (ha)","Mean ΔNDVI"])).add_to(m)
         if st.session_state.accepted_aoi:
             folium.GeoJson(st.session_state.accepted_aoi["geometry"], name="Accepted AOI",
                            style_function=lambda _: {"color":"#00e5ff", "weight":3, "fillOpacity":0.08}).add_to(m)
@@ -204,6 +257,7 @@ with workspace:
                 try:
                     accepted = validate_aoi(drawn["geometry"])
                     st.session_state.accepted_aoi = accepted
+                    st.session_state.detection_result = None
                     st.session_state.aoi_origin = "Drawn on map"
                     st.rerun()
                 except AOIError as exc:
@@ -212,44 +266,81 @@ with workspace:
 
     st.divider()
     k1, k2, k3 = st.columns(3)
-    k1.metric("Detected Sites", "—")
-    k2.metric("Protected Areas", "—")
-    k3.metric("Disturbed Area", "—")
+    k1.metric("Detected Sites", f"{result['total_candidates']:,}" if result else "—")
+    k2.metric("Protected Areas", "Not assessed")
+    k3.metric("Disturbed Area", f"{result['disturbed_ha']:,.2f} ha" if result else "—")
     st.subheader("Candidate Results")
-    st.dataframe([], column_config={"Rank":"Rank", "Location":"Location", "Area (ha)":"Area (ha)",
-                                    "Change severity":"Change severity", "Protected status":"Protected status",
-                                    "Review status":"Review status"}, use_container_width=True)
-    st.caption("Results will appear after detection is implemented and executed in Increment 2.")
+    if result and result['features']:
+        rows = [{"Rank":f['properties']['rank'],"Candidate":f['properties']['candidate_id'],
+            "Area (ha)":round(f['properties']['area_ha'],3),
+            "Mean ΔNDVI":round(f['properties']['mean_dNDVI'],3),
+            "Priority":round(f['properties']['priority'],3),"Review status":"Not reviewed"}
+            for f in result['features']]
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        if result['truncated']:
+            st.warning(f"Showing the first {result['shown_candidates']} of {result['total_candidates']} candidates; exports are similarly limited.")
+    else:
+        st.info("No candidate results yet." if not result else "No qualifying patches found with current settings.")
+    st.caption("Protected-area and felling-notification cross-checking are planned for Increment 3.")
 
 with candidates_tab:
     st.subheader("Candidate Intelligence")
-    st.info("No detections yet. Candidate ranking, map-linked review and analyst status are reserved for subsequent increments.")
-    st.dataframe([], use_container_width=True)
+    if result and result['features']:
+        st.caption("Change-screening candidates only · No criminal classification has been performed.")
+        ids=[f['properties']['candidate_id'] for f in result['features']]
+        selected=st.selectbox("Inspect candidate",ids)
+        feat=next(f for f in result['features'] if f['properties']['candidate_id']==selected)
+        props=feat['properties']
+        c1,c2,c3=st.columns(3)
+        c1.metric("Area",f"{props['area_ha']:.2f} ha")
+        c2.metric("Mean ΔNDVI",f"{props['mean_dNDVI']:.3f}")
+        c3.metric("Screening score",f"{props['priority']:.2f}")
+        st.write(f"Candidate centre: {props['latitude']:.5f}, {props['longitude']:.5f}")
+        st.info("Protected-area, notification and permit checks have not been conducted. Review status is not persisted in Increment 2.")
+    else:
+        st.info("Run detection to generate candidate polygons for review.")
 
 with analytics_tab:
     st.subheader("Spatial Analytics")
-    st.info("No analysis results. Candidate distributions and change statistics will appear after the detection engine is connected.")
+    if result:
+        st.metric("Detected change area",f"{result['disturbed_ha']:,.2f} ha")
+        st.metric("Candidate polygons",result['total_candidates'])
+        st.metric("Valid paired-imagery area",f"{result['valid_area_ha']:,.2f} ha")
+        st.write("Sentinel-2 scenes: reference",result['scene_counts']['before'],
+                 "· comparison",result['scene_counts']['after'])
+        st.caption("Valid-area statistic represents cloud-masked pixel overlap, not detection accuracy. The thresholds are not calibrated.")
+    else:
+        st.info("No analysis results yet.")
 
 with reports_tab:
     st.subheader("Reports & Data")
     if st.session_state.accepted_aoi:
-        st.download_button(
-            "Download accepted AOI (GeoJSON)",
-            data=json.dumps({"type":"FeatureCollection","features":[{"type":"Feature", "properties":{
-                "area_ha":st.session_state.accepted_aoi["area_ha"]},
-                "geometry":st.session_state.accepted_aoi["geometry"]}]}, indent=2),
-            file_name="ecds_accepted_aoi.geojson", mime="application/geo+json"
-        )
-    settings = {"application":"ECDS", "increment":1, "analysis_executed":False,
-                "reference_period":[before_start.isoformat(),before_end.isoformat()],
-                "comparison_period":[after_start.isoformat(),after_end.isoformat()],
-                "thresholds":{"ndvi_decrease":ndvi_drop, "bsi_increase":bsi_rise,
-                              "nbr_decrease":nbr_drop, "min_patch_ha":min_patch,
-                              "cloud_score_clear_threshold":cloud_score},
-                "aoi_area_ha":st.session_state.accepted_aoi["area_ha"] if st.session_state.accepted_aoi else None}
-    st.download_button("Download configuration (JSON)", json.dumps(settings,indent=2),
+        st.download_button("Download accepted AOI (GeoJSON)",
+            data=json.dumps({"type":"FeatureCollection","features":[{"type":"Feature",
+             "properties":{"area_ha":st.session_state.accepted_aoi['area_ha']},
+             "geometry":st.session_state.accepted_aoi['geometry']}]},indent=2),
+            file_name="ecds_accepted_aoi.geojson",mime="application/geo+json")
+    settings = dict(active_config)
+    settings.pop('geometry',None)
+    settings.update({"application":"ECDS","increment":2,"analysis_executed":bool(result),
+                     "aoi_area_ha":st.session_state.accepted_aoi['area_ha'] if st.session_state.accepted_aoi else None})
+    st.download_button("Download configuration (JSON)",json.dumps(settings,indent=2),
                        file_name="ecds_configuration.json",mime="application/json")
-    st.caption("Detection products and analytical reports will be enabled after the underlying processing exists.")
+    if result:
+        fc={"type":"FeatureCollection","features":result['features']}
+        st.download_button("Download screening candidates (GeoJSON)",json.dumps(fc),
+                           file_name="ecds_change_candidates.geojson",mime="application/geo+json")
+        import csv, io
+        buf=io.StringIO()
+        cols=['candidate_id','rank','area_ha','mean_dNDVI','priority','longitude','latitude','review_status']
+        writer=csv.DictWriter(buf,fieldnames=cols)
+        writer.writeheader()
+        writer.writerows({k:f['properties'].get(k) for k in cols} for f in result['features'])
+        st.download_button("Download screening candidates (CSV)",buf.getvalue(),
+                           file_name="ecds_change_candidates.csv",mime="text/csv")
+        st.caption("These exports contain only the displayed candidate subset (maximum 250). No protected-area or permit verification has been performed.")
+        st.write("**Method:**",result['method'])
+        st.write("**Datasets:**",result['source'])
 
 st.divider()
 st.caption("ECDS · Environmental change screening prototype · Detected changes are leads for analyst review, never proof of an offence.")

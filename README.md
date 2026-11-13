@@ -1,45 +1,78 @@
 # ECDS — Environmental Crime Detection System
 
-## Increment 1: Locked Streamlit interface
+## Increment 2: Satellite change detection (Streamlit + Earth Engine)
 
-An analyst-facing **interface and AOI-validation prototype** built from the existing Förändringsradar GEE workflow. **It does not run satellite imagery detection yet.** The four approved tabs, configuration sidebar, central map and empty results structure are present. Detection integration is Increment 2.
+This project retains the **locked Increment 1 UI**: four tabs, left analysis configuration, central interactive GIS map, candidate table, analytics and export. It now runs the original Sentinel-2 land-change detection pipeline using the Earth Engine Python API.
+
+**This is a research/prototype screening system, not a system for confirming crimes or evaluating individuals.** Detection results are land-disturbance leads requiring independent analyst review. No police-sensitive data should be uploaded to Google Earth Engine or Streamlit Community Cloud.
+
+### What works
+
+- GeoJSON or drawn-polygon AOI, with **50–5,000 ha** guardrails and preliminary Sweden-only screening
+- Comparison dates **2016–2025 inclusive** (default 2024 vs 2025 summer)
+- Cloud Score+-masked Sentinel-2 median composites, NDVI/BSI/NBR comparison
+- Dynamic World masking of water, cropland, built-up land, snow/ice
+- 8-connected change-patch filtering; 0.25–10 ha minimum selectable patch size
+- Ranked polygon candidates with area, mean ΔNDVI and transparent size × severity score
+- Earth Engine map tiles: before, after, ΔNDVI and flagged pixels
+- Candidate table, site inspection, statistics, GeoJSON and CSV downloads
+- Valid paired imagery area indicator, scene counts and processing errors
+
+**Not yet connected**: Swedish protected-area boundaries, forestry notifications, permits, PostGIS, persistent reviews, and calibrated detection accuracy (planned future increments). 'Protected Areas' dashboard metric therefore reads 'Not assessed'. Data export is capped at **250 ranked polygons per run** (total count still reported) to keep the Streamlit session responsive. `candidate_id` values are **within-run IDs**, not persistent references. Map tile URLs may expire; rerun detection to refresh them.
+
+### Repository layout
+
+Upload the **contents** of this folder to your GitHub repository root, so `app.py` is at the top level. Do not upload the ZIP or commit secrets.
+
+```
+app.py
+gee_engine.py
+geo_utils.py
+requirements.txt
+README.md
+.gitignore
+.streamlit/config.toml
+.streamlit/secrets.toml.example
+data/sweden_boundary.geojson
+test_geo_utils.py
+test_gee_engine.py
+```
+
+### Earth Engine prerequisites
+
+You need a Google Cloud project registered for Earth Engine and access to Earth Engine through a service account or user identity. The Google Cloud project must have the Earth Engine API enabled and appropriate permissions. This step is **essential**: GitHub deployment by itself does not grant Earth Engine access.
+
+For **Streamlit Community Cloud**, open the app's **Settings → Secrets** and paste your values (not into GitHub):
+
+```toml
+EE_PROJECT = "your-google-cloud-project-id"
+EE_SERVICE_ACCOUNT_JSON = '''{"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n","client_email":"...","token_uri":"https://oauth2.googleapis.com/token"}'''
+```
+
+The `EE_SERVICE_ACCOUNT_JSON` string must contain the **entire real JSON key** exactly as downloaded. An easier alternative is to copy the JSON *verbatim* between the triple single quotes. The linked Google Cloud project and service-account identity must actually have permission to use Earth Engine. Do not publish key files or screenshots containing credentials.
+
+For **local use** you can instead run `earthengine authenticate` (or `ee.Authenticate()` interactively in a trusted Python environment) and set `EE_PROJECT` in local `.streamlit/secrets.toml`, or rely on an existing configured default Earth Engine project.
 
 ### Run locally
 
-Python 3.10+ recommended.
-
 ```bash
-python -m venv .venv
-# Windows PowerShell:
-.venv\Scripts\Activate.ps1
-# macOS / Linux: source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-### Publish using GitHub + Streamlit Community Cloud
+### Test
 
-1. Create a GitHub repository named `ECDS` and upload the **contents** of this folder, including `.streamlit/config.toml` and `data/sweden_boundary.geojson`.
-2. In Streamlit Community Cloud, select the repository, branch and `app.py` entry point; deploy.
-3. No Earth Engine credentials are needed for Increment 1. Do not upload credentials or sensitive information to GitHub.
+```bash
+pip install pytest
+pytest -q
+```
 
-### Implemented
+Tests cover local AOI and parameter validation. **Live Earth Engine execution has not been run here because valid user credentials are not available.** After connecting the app, validate with a small AOI and inspect the resulting imagery and polygons.
 
-- Four approved tabs: Detection Workspace, Candidate Intelligence, Spatial Analytics, Reports & Data.
-- Analysis sidebar with municipality **navigation**, AOI draw / GeoJSON polygon upload, two comparison periods (both strictly within **2016–2025**) and the original spectral defaults. Defaults: summer 2024 vs summer 2025; custom dates are also bounded to 2016-01-01 through 2025-12-31.
-- Draw Polygon and Rectangle tools; accepted AOI outline and map controls.
-- **Hard AOI area validation**: one Polygon, 50–5,000 ha, EPSG:4326, geodesic area. Rejected AOIs are never accepted.
-- Coarse preliminary Sweden boundary screening (bundled Natural Earth low-resolution outline); not authoritative municipal/border validation.
-- GeoJSON AOI and analysis-configuration downloads.
-- Map satellite tiles use Esri World Imagery (external public tiles); OSM alternative.
+### Validation caveats
 
-### Deliberately not implemented
-
-- No GEE authentication or satellite detection (Run Detection disabled).
-- Municipality selection navigates the map; **it does not automatically select municipal geometry**, since most municipalities exceed the 50 km² limit.
-- No protected-area analysis, felling notifications, candidate scores, analyst review storage, database or reports. Those require processing and authoritative datasets in later increments.
-- The boundary is low-resolution and can reject valid near-coast AOIs or pass small border discrepancies; replace with a licensed authoritative Swedish boundary before operational use.
-
-### Safety and data handling
-
-Use public data only. Do not upload case records, personally identifying information or confidential policing data to this publicly hosted proof of concept. The application screens physical land disturbances and cannot establish criminal activity.
+- Scene counts indicate scene presence, not cloud-free coverage. The paired valid-area metric provides additional data-coverage context.
+- The coarse Sweden boundary can reject some legitimate coastal/island AOIs or accept some near-border polygons; authoritative boundaries are a future improvement.
+- The current candidate score is `area_ha × abs(mean_dNDVI)`, **not crime probability**.
+- Detection scores are not yet calibrated against independent reference sites.
+- The service uses external imagery and basemap providers; it is for open-data demonstration only.
