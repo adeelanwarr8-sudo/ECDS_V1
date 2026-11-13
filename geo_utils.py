@@ -12,7 +12,14 @@ from shapely.validation import explain_validity
 MIN_HA = 50.0
 MAX_HA = 5000.0
 _GEOD = Geod(ellps="WGS84")
-_BOUNDARY = Path(__file__).parent / "data" / "sweden_boundary.geojson"
+# Resolve the bundled boundary relative to this module, not the working directory.
+# Support both the current GitHub root layout and the original data/ layout.
+_PROJECT_DIR = Path(__file__).resolve().parent
+_BOUNDARY_CANDIDATES = (
+    _PROJECT_DIR / "sweden_boundary.geojson",
+    _PROJECT_DIR / "data" / "sweden_boundary.geojson",
+)
+_BOUNDARY = next((path for path in _BOUNDARY_CANDIDATES if path.is_file()), None)
 
 
 class AOIError(ValueError):
@@ -21,6 +28,11 @@ class AOIError(ValueError):
 
 @lru_cache(maxsize=1)
 def sweden_boundary():
+    if _BOUNDARY is None:
+        raise AOIError(
+            "Sweden boundary data is missing. Ensure sweden_boundary.geojson "
+            "is included alongside geo_utils.py in the GitHub repository."
+        )
     with _BOUNDARY.open(encoding="utf-8") as file:
         features = json.load(file)["features"]
     return shape(features[0]["geometry"])

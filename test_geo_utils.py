@@ -24,3 +24,10 @@ def test_outside_sweden_rejected():
 def test_multiple_aois_rejected():
     with pytest.raises(AOIError,match="Exactly one"):
         validate_aoi({"type":"FeatureCollection","features":[{"type":"Feature","geometry":rect(17.9,59.2,17.99,59.25),"properties":{}}, {"type":"Feature","geometry":rect(17.9,59.2,17.99,59.25),"properties":{}}]})
+
+
+def test_sweden_boundary_file_is_resolvable():
+    from geo_utils import sweden_boundary
+    boundary = sweden_boundary()
+    assert not boundary.is_empty
+    assert boundary.is_valid
