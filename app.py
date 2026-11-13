@@ -105,20 +105,31 @@ with st.sidebar:
     st.divider()
     st.subheader("2 · Analysis Period")
     season = st.selectbox("Season", ["Summer (Jun–Aug)", "Late summer (Jul–Sep)", "Growing season (May–Sep)"], index=0)
-    complete_year = date.today().year if date.today().month >= 10 else date.today().year - 1
-    years = list(range(complete_year, 2018, -1))
-    before_year = st.selectbox("Reference year", years, index=min(1, len(years)-1))
+    # ECDS study window: complete calendar years 2016 through 2025 only.
+    min_analysis_date = date(2016, 1, 1)
+    max_analysis_date = date(2025, 12, 31)
+    years = list(range(2025, 2015, -1))
+    before_year = st.selectbox("Reference year", years, index=1)
     after_year = st.selectbox("Comparison year", years, index=0)
     season_bounds = {"Summer (Jun–Aug)": ((6,1), (8,31)), "Late summer (Jul–Sep)": ((7,1), (9,30)), "Growing season (May–Sep)": ((5,15), (9,15))}
     (sm, sd), (em, ed) = season_bounds[season]
+    st.caption("Permitted analysis period: **2016–2025** (inclusive).")
     with st.expander("Review or edit exact dates", expanded=False):
-        before_start = st.date_input("Reference start", date(before_year, sm, sd))
-        before_end = st.date_input("Reference end", date(before_year, em, ed))
-        after_start = st.date_input("Comparison start", date(after_year, sm, sd))
-        after_end = st.date_input("Comparison end", date(after_year, em, ed))
-    dates_valid = before_start < before_end < after_start < after_end <= date.today()
+        before_start = st.date_input("Reference start", date(before_year, sm, sd),
+                                     min_value=min_analysis_date, max_value=max_analysis_date,
+                                     key=f"before_start_{before_year}_{season}")
+        before_end = st.date_input("Reference end", date(before_year, em, ed),
+                                   min_value=min_analysis_date, max_value=max_analysis_date,
+                                   key=f"before_end_{before_year}_{season}")
+        after_start = st.date_input("Comparison start", date(after_year, sm, sd),
+                                    min_value=min_analysis_date, max_value=max_analysis_date,
+                                    key=f"after_start_{after_year}_{season}")
+        after_end = st.date_input("Comparison end", date(after_year, em, ed),
+                                  min_value=min_analysis_date, max_value=max_analysis_date,
+                                  key=f"after_end_{after_year}_{season}")
+    dates_valid = (min_analysis_date <= before_start < before_end < after_start < after_end <= max_analysis_date)
     if not dates_valid:
-        st.error("Dates must be valid, sequential and not extend into the future.")
+        st.error("Analysis periods must be sequential and entirely within 2016–2025.")
 
     st.divider()
     st.subheader("3 · Detection Settings")

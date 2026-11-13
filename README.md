@@ -26,7 +26,7 @@ streamlit run app.py
 ### Implemented
 
 - Four approved tabs: Detection Workspace, Candidate Intelligence, Spatial Analytics, Reports & Data.
-- Analysis sidebar with municipality **navigation**, AOI draw / GeoJSON polygon upload, two comparison periods and the original spectral defaults.
+- Analysis sidebar with municipality **navigation**, AOI draw / GeoJSON polygon upload, two comparison periods (both strictly within **2016–2025**) and the original spectral defaults. Defaults: summer 2024 vs summer 2025; custom dates are also bounded to 2016-01-01 through 2025-12-31.
 - Draw Polygon and Rectangle tools; accepted AOI outline and map controls.
 - **Hard AOI area validation**: one Polygon, 50–5,000 ha, EPSG:4326, geodesic area. Rejected AOIs are never accepted.
 - Coarse preliminary Sweden boundary screening (bundled Natural Earth low-resolution outline); not authoritative municipal/border validation.
